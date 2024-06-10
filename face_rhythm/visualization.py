@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Union, Tuple, List
 from pathlib import Path
 import copy
 import gc
@@ -160,7 +160,7 @@ class FrameVisualizer:
         point_sizes=None,
 
         points_colors=(0, 255, 255),
-        alpha=1.0,
+        alpha=None,
         
         text=None,
         text_positions=None,
@@ -237,7 +237,7 @@ class FrameVisualizer:
         ## Get arguments from self if not None
         point_sizes = self.point_sizes if self.point_sizes is not None else point_sizes
         points_colors = self.points_colors if self.points_colors is not None else points_colors
-        alpha = self.alpha if self.alpha is not None else alpha
+        alpha = alpha if alpha is not None else self.alpha
         text = self.text if self.text is not None else text
         text_positions = self.text_positions if self.text_positions is not None else text_positions
         text_color = self.text_color if self.text_color is not None else text_color
@@ -387,6 +387,7 @@ class FrameVisualizer:
                         )
             ## Do weighted addition
             image_out = cv2.addWeighted(image_out, alpha, image, (1-alpha), 0.0)
+
 
         ## Plot text
         if text is not None:
@@ -668,3 +669,48 @@ def display_toggle_image_stack(images, image_size=None, clim=None, interpolation
     """
 
     display(HTML(html_code))
+
+
+def complex_colormap(
+    mags: np.ndarray, 
+    angles: np.ndarray, 
+    normalize_mags: bool = True,
+    color_sin: Tuple[int, int, int] = (255, 0, 0),
+    color_cos: Tuple[int, int, int] = (0, 0, 255),
+) -> np.ndarray:
+    """
+    Generates an RGB colormap for complex values based on magnitude and angle.
+
+    The colors vary with the angle and the brightness varies with
+    the magnitude.
+
+    Args:
+        mags (np.ndarray): 
+            Array of magnitudes.
+        angles (np.ndarray): 
+            Array of angles in radians.
+        normalize_mags (bool):
+            If True, applies min-max normalization to the magnitudes.
+
+    Returns:
+        np.ndarray: 
+            Array with RGB values.
+    """
+    assert mags.shape == angles.shape, "The shapes of mags and angles must be the same."
+
+    ## Normalize the magnitudes to the range [0, 1]
+    if normalize_mags:
+        mags_norm = (mags - np.min(mags)) / (np.max(mags) - np.min(mags))
+    mags_norm = np.clip(mags_norm, 0, 1)
+
+    ## Initialize the RGB array
+    rgb = np.zeros((mags.size, 3))
+
+    ## Apply the colors according to the angles
+    rgb += np.array(color_sin)[None, :] * np.sin(angles)[:, None]
+    rgb += np.array(color_cos)[None, :] * np.cos(angles)[:, None]
+
+    ## Apply the brightness according to the normalized magnitudes
+    rgb *= mags_norm[:, None]
+
+    return rgb
