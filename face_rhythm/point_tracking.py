@@ -36,6 +36,7 @@ class PointTracker(FR_Module):
                         'framesHalted_before': 30,  ## Number of frames to halt tracking before a violation.
                         'framesHalted_after': 30,  ## Number of frames to halt tracking after a violation.
                     },
+        idx_start: Union[int, list, np.ndarray]=0,
         visualize_video: bool=False,
         params_visualization: dict={
                         'alpha':1.0,
@@ -98,6 +99,12 @@ class PointTracker(FR_Module):
                         'framesHalted_before': 30,  ## Number of frames to halt tracking before a violation.
                         'framesHalted_after': 30,  ## Number of frames to halt tracking after a violation.
                     }
+            idx_start (int, list, np.ndarray, optional):
+                The index of the first frame to track.
+                If an integer, this will be the index for all videos or for the
+                contiguous index if 'contiguous' is True. If a list or array and
+                'contiguous' is False, then each index will be used for each
+                video.
             visualize_video (bool, optional):
                 Whether or not to visualize the video.
                 If on a server or system without a display, this should be False.
@@ -141,7 +148,23 @@ class PointTracker(FR_Module):
         assert isinstance(params_outlier_handling, dict), "FR ERROR: params_outlier_handling must be a dict"
         ## Assert that params_visualization is a dict
         assert isinstance(params_visualization, dict), "FR ERROR: params_visualization must be a dict"
+        ## Assert that idx_start is an integer, list, or numpy array
+        assert isinstance(idx_start, (int, list, np.ndarray)), "FR ERROR: idx_start must be an integer, list, or numpy array"
         
+        ## Prepare start indices
+        if self._contiguous:
+            assert isinstance(idx_start, int), "FR ERROR: idx_start must be an integer if contiguous is True"
+            self.idx_start = idx_start
+        else:
+            if isinstance(idx_start, int):
+                self.idx_start = [idx_start]*len(buffered_video_reader)
+            elif isinstance(idx_start, (list, np.ndarray)):
+                assert len(idx_start) == len(buffered_video_reader), "FR ERROR: idx_start must have the same length as the number of videos"
+                assert all([isinstance(i, int) for i in idx_start]), "FR ERROR: idx_start must be a list of integers"
+                self.idx_start = list(idx_start)
+            else:
+                raise ValueError("FR ERROR: idx_start must be an integer, list, or numpy array")
+
         ## Define default parameters
         params_optFlow_default = {
                 "method": "lucas_kanade",
@@ -198,7 +221,7 @@ class PointTracker(FR_Module):
         if self._contiguous:
             video = self.buffered_video_reader
             video.method_getitem = "continuous"
-            video.set_iterator_frame_idx(0)
+            # video.set_iterator_frame_idx(self.idx_start)
             self.videos = [video]
         else:
             self.buffered_video_reader.method_getitem = "by_video"
@@ -342,6 +365,7 @@ class PointTracker(FR_Module):
                 video=video,
                 points_prev=points_prev,
                 frame_prev=frame_prev,
+                idx_start=self.idx_start if self._contiguous else self.idx_start[ii],
             )
             self.points_tracked.append(points)
             self.violations.append(self.violations_currentVideo.tocoo())
@@ -374,6 +398,7 @@ class PointTracker(FR_Module):
         video,
         points_prev,
         frame_prev,
+        idx_start=0,
     ):
         """
         Track points in a single video.
@@ -393,6 +418,8 @@ class PointTracker(FR_Module):
             frame_prev (np.ndarray, uint8):
                 Previous frame. Should be formatted correctly, as no
                  corrective formatting will be done here.
+            idx_start (int, optional):
+                The index of the first frame to track. Default is 0.
 
         Returns:
             points (np.ndarray, np.float32):
@@ -410,8 +437,8 @@ class PointTracker(FR_Module):
         points_tracked = np.zeros((len(video), points_prev.shape[0], 2), dtype=np.float32)
         self.violations_currentVideo = scipy.sparse.lil_matrix((len(video), points_prev.shape[0]), dtype=np.bool_)
 
-        self.i_frame = 0
-        video.set_iterator_frame_idx(0)
+        self.i_frame = idx_start
+        video.set_iterator_frame_idx(idx_start)
         with tqdm(total=len(video), desc='frame #', position=0, leave=True, disable=self._verbose < 2, mininterval=1.0) as pbar:
             while (self.i_frame < len(video)):
                 for frame in video:

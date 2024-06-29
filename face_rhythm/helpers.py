@@ -25,6 +25,8 @@ import scipy
 import scipy.sparse
 import scipy.signal
 
+import tensorly as tl
+
 def prepare_cv2_imshow():
     """
     This function is necessary because cv2.imshow() 
@@ -947,6 +949,40 @@ def make_batches(
                 yield iterable[start:end], [start, end]
             else:
                 yield iterable[start:end]
+
+
+def cp_to_dense(cp, weights=None):
+    """
+    Converts a list (of length n_modes) of 2D arrays (of shape (len_dim, rank))
+     [CP format] to a dense tensor (of shape (len_dim, len_dim, ...))
+    RH 2022
+
+    Args:
+        cp (list of np.ndarray):
+            List of 2D arrays in CP format.
+            Tensorly uses this format for their 'cp' format.
+
+    Returns:
+        dense (np.ndarray):
+            Dense tensor
+    """
+    rank = cp[0].shape[1]
+    n_modes = len(cp)
+    str_einsum = ','.join([chr(97+m)+'r' for m in range(n_modes)]) + '->' + ''.join([chr(97+m) for m in range(n_modes)])
+    if weights is None:
+        weights = np.ones(rank)
+
+    ## check if numpy or torch
+    if isinstance(cp[0], np.ndarray):
+        einsum = np.einsum
+        weights = np.array(weights).astype(cp[0].dtype)
+    elif isinstance(cp[0], torch.Tensor):
+        einsum = torch.einsum
+        weights = torch.as_tensor(weights).type(cp[0].dtype).to(cp[0].device)
+
+    dense = einsum(str_einsum, *[cp[m] * weights for m in range(n_modes)])
+    
+    return dense
 
 
 #####################################################################################################################################
@@ -2577,6 +2613,54 @@ class VQT():
             return f"VQT object with parameters: Fs_sample={self.Fs_sample}, Q_lowF={self.Q_lowF}, Q_highF={self.Q_highF}, F_min={self.F_min}, F_max={self.F_max}, n_freq_bins={self.n_freq_bins}, win_size={self.win_size}, downsample_factor={self.downsample_factor}, DEVICE_compute={self.DEVICE_compute}, DEVICE_return={self.DEVICE_return}, batch_size={self.batch_size}, return_complex={self.return_complex}, plot_pref={self.plot_pref}"
 
 
+def generate_multiphasic_sinewave(
+    n_samples: int = 10000,
+    n_periods: float = 1.0,
+    n_waves: int = 3,
+    return_x: bool = False,
+    return_phases: bool = False,
+):
+    """
+    Generates a multiphasic sine wave.
+    RH 2024
+
+    Args:
+        n_samples (int): 
+            Number of samples to generate.
+        n_periods (float): 
+            Number of periods in the sine wave.
+        n_waves (int): 
+            Number of sine waves to generate.
+        return_x (bool): 
+            If ``True``, returns the x-values along with the waves.
+        return_phases (bool): 
+            If ``True``, returns the phases along with the waves.
+
+    Returns:
+        (tuple): 
+            Depending on the `return_x` and `return_phases` parameters, the
+            function returns some combination of the following: \n
+                * waves (np.ndarray): The generated sine waves.
+                * x (np.ndarray): The x-values.
+                * phases (np.ndarray): The phases of the sine waves.
+    """
+    x = np.linspace(0, n_periods * np.pi*2, n_samples)
+
+    phases = np.stack([
+        x - ii * np.pi * (2 / n_waves) for ii in range(n_waves)
+    ])
+    waves = np.cos(phases)
+    
+    if return_x and return_phases:
+        return waves, x, phases
+    elif return_x:
+        return waves, x
+    elif return_phases:
+        return waves, phases
+    else:
+        return waves
+    
+
 ############################################################################################################################################################################
 #################################################################### TORCH HELPERS #########################################################################################
 ############################################################################################################################################################################
@@ -2627,6 +2711,28 @@ def set_device(
 
     return device
 
+
+def tensorly_cp_to_device(cp, device='cpu'):
+    """
+    Moves the factors and weights of a tensorly cp object to a particular
+    device.
+
+    RH 2024
+
+    Args:
+        cp (tensorly.cp_tensor.CP):
+            The tensorly CP object to move to a device.
+        device (str):
+            The device to move the factors and weights to.
+
+    Returns:
+        cp (tensorly.cp_tensor.CP):
+            The tensorly CP object with factors and weights moved to the device.
+    """
+    for ii in range(len(cp.factors)):
+        cp.factors[ii] = cp.factors[ii].to(device)
+    cp.weights = cp.weights.to(device)
+    return cp
 
 
 ############################################################################################################################################################################
@@ -2778,6 +2884,217 @@ class Cmap_conjunctive:
         colors = (colors * (self.normalization_range[1] - self.normalization_range[0]) + self.normalization_range[0]).astype(self.dtype_out)
 
         return colors
+
+
+class Colorwheel:
+    """
+    Generates a 2D colorwheel colormap (magnitude and angle). Useful for
+    visualizing complex/polar values, optical flow, and other cyclic data.
+    RH 2024
+
+    Args:
+        rotation (float):
+            Rotation of the colorwheel in degrees.
+        saturation (float):
+            Saturation of the colors.
+        center (int):
+            Center of the colorwheel.
+        radius (int):
+            Radius of the colorwheel.
+        dtype (np.dtype):
+            Data type of the output colormap.
+        bit_depth (int):
+            Bit depth of the colorwheel.
+        exponent (float):
+            Exponent used to adjust the color intensity.
+        normalize (bool):
+            Whether to normalize the colorwheel.
+        colors (list):
+            List of colors to use for the colorwheel. Should be a list of tuples
+            or lists containing RGB values. Ex:
+            [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    """
+    def __init__(
+        self,
+        rotation: float = 0.0,
+        saturation: float = 1.0,
+        center: int = 0,
+        radius: int = 255,
+        dtype: np.dtype = np.uint8,
+        bit_depth: int = 16,
+        exponent: float = 10,
+        normalize: bool = True,
+        colors: List[Union[List, Tuple]] = [
+            [1  , 0  , 0  ], 
+            [1  , 0.5, 0  ], 
+            [1  , 1  , 0  ], 
+            [0.5, 1  , 0  ], 
+            [0  , 1  , 0  ],  
+            [0  , 1  , 0.5],  
+            [0  , 1  , 1  ], 
+            [0  , 0.5, 1  ], 
+            [0  , 0  , 1  ],
+            [0.5, 0  , 1  ],
+            [1  , 0  , 1  ], 
+            [1  , 0  , 0.5], 
+        ],        
+    ):
+        """
+        Initializes the ColorwheelColormap with given parameters.
+        """
+        import scipy.interpolate
+        import scipy.special
+
+        self.rotation = rotation
+        self.saturation = saturation
+        self.center = center
+        self.radius = radius
+        self.dtype = dtype
+        self.bit_depth = bit_depth
+        self.exponent = exponent
+        self.normalize = normalize
+        self.colors = np.array(colors)
+
+        # Make a rainbow colorwheel
+        # Create 3 single cosine waves centered at 0, 120, and 240 degrees spanning 120 degrees each
+        import scipy.signal
+        waves, x = generate_multiphasic_sinewave(
+            n_samples=int(2**bit_depth),
+            n_periods=1 + 2 / int(2**bit_depth),
+            n_waves=len(colors),
+            return_x=True,
+        )
+
+        waves = ((waves + 1).astype(np.float64) / 2) ** exponent
+        
+        waves = (waves - waves.min()) / (waves.max() - waves.min())
+
+        if normalize:
+            if waves.shape[0] == 1:
+                waves = np.ones_like(waves)
+            else:
+                waves = waves / np.sum(waves, axis=0, keepdims=True)
+
+        waves = (waves * (radius - (1-saturation) * radius) + (1-saturation) * radius)
+        waves = np.roll(waves, int(rotation * 2**bit_depth / (2*np.pi)), axis=1)
+
+        # Create interpolation function
+        self.fn_interp = scipy.interpolate.interp1d(
+            x=x,
+            y=waves,
+            kind='linear',
+            axis=1,
+            bounds_error=False,
+            fill_value='extrapolate',
+        )
+
+    def __call__(
+        self,
+        angles: Union[np.ndarray, List[Union[float, int]], Tuple[Union[float, int]], float, int],
+        magnitudes: Optional[Union[np.ndarray, List[Union[float, int]], Tuple[Union[float, int]], float, int]] = None,
+        normalize_magnitudes: bool = True,
+    ) -> np.ndarray:
+        """
+        Outputs colors for a given set of angles and magnitudes.
+        RH 2024
+
+        Args:
+            angles (Union[np.ndarray, List[float, int], Tuple[float, int], float, int]):
+                Array of angles in radians. *Shape: (n_samples,)*
+            magnitudes (Optional[Union[np.ndarray, List[float, int], Tuple[float, int], float, int]]):
+                Array of magnitudes. *Shape: (n_samples,)*
+            normalize_magnitudes (bool):
+                If True, applies min-max normalization to the magnitudes. (Default is ``True``)
+
+        Returns:
+            np.ndarray:
+                Array with RGB values. *Shape: (n_samples, 3)*
+        """
+        # Check inputs
+        def check_input(arg):
+            if isinstance(arg, (float, int)):
+                arg = np.array([angles])
+            elif isinstance(arg, (list, tuple)):
+                arg = np.array(arg)
+            elif not isinstance(angles, np.ndarray):
+                raise ValueError("angles and magnitudes must be a numpy array, list, or tuple of ints or floats.")
+            return arg
+
+        angles = check_input(angles)
+        magnitudes = check_input(magnitudes) if magnitudes is not None else None
+
+        # Normalize the magnitudes
+        if magnitudes is not None:
+            if normalize_magnitudes:
+                magnitudes = (magnitudes - np.min(magnitudes)) / (np.max(magnitudes) - np.min(magnitudes))
+            magnitudes = np.clip(magnitudes, 0, 1)
+        else:
+            magnitudes = np.ones_like(angles)
+
+        # Get the saturated color by interpolating the colorwheel
+        sample_colors = self.fn_interp(angles % (2*np.pi))
+        
+        # Clip the colors
+        sample_colors = np.clip(sample_colors, 0, self.radius)
+
+        # Project to RGB
+        rgb = self.colors.T @ sample_colors
+
+
+        # Apply the saturation
+        rgb = rgb * magnitudes[None, :] + (1 - magnitudes)[None, :] * self.center
+
+        # Convert to dtype
+        ## Clip the values to the dtype range
+        if rgb.dtype != self.dtype:
+            vmax, vmin = np.iinfo(self.dtype).max, np.iinfo(self.dtype).min
+            rgb = np.clip(rgb, vmin, vmax)
+
+        rgb = rgb.astype(self.dtype)
+
+        return rgb.T
+
+    def plot_colorwheel(self, n_samples: int = 100000):
+        """
+        Plots the colorwheel colormap.
+        RH 2024
+
+        Args:
+            n_samples (int):
+                Number of samples to plot. (Default is ``100000``)
+        """
+        import matplotlib.pyplot as plt
+        l = int(np.ceil(n_samples**0.5))
+        grid = np.meshgrid(np.linspace(-1, 1, l), np.linspace(-1, 1, l), indexing='xy')
+        grid = grid[0] + 1j*grid[1]
+        grid = grid.reshape(-1)
+        angles = np.angle(grid)
+        magnitudes = np.abs(grid)
+
+        mask = magnitudes > 1
+        magnitudes = np.clip(magnitudes, 0, 1)
+        colors = self(angles, magnitudes)
+        colors = np.clip(colors, 0, 255)
+
+        im = np.zeros((l, l, 3), dtype=self.dtype)
+        im[*np.meshgrid(range(l), range(l), indexing='ij')] = colors.reshape(im.shape[:2] + (3,))
+
+        fig, axs = plt.subplots(2, 1, figsize=(5, 10))
+        axs[0].imshow(im)
+        x = np.linspace(0, 2*np.pi, l)
+        [axs[1].plot(x, v, color=c) for v, c in zip(self(x).T, self.colors)]
+        axs[1].set_ylabel('Channel magnitude')
+        axs[1].set_xlabel('Phase (rads)')
+
+    def __repr__(self) -> str:
+        """
+        Returns a string representation of the ColorwheelColormap object.
+        """
+        return (f"ColorwheelColormap(rotation={self.rotation}, "
+                f"saturation={self.saturation}, center={self.center}, "
+                f"radius={self.radius}, dtype={self.dtype}, "
+                f"bit_depth={self.bit_depth}, exponent={self.exponent}, "
+                f"normalize={self.normalize})")
 
 
 ##########################################################################################################################################
@@ -4084,3 +4401,119 @@ class Equivalence_checker():
             print(f"Equivalence check not performed. Path: {path}.") if self._verbose > 0 else None
 
         return result
+
+
+##########################################################################################################################################
+######################################################### SIMILARITY #####################################################################
+##########################################################################################################################################
+
+
+def order_cp_factors_by_EVR(
+    tensor_dense: Union[np.ndarray, torch.Tensor],
+    cp_factors: Union[list, object],
+    cp_weights: Optional[Union[np.ndarray, torch.Tensor]] = None,
+    orthogonalizable_EVR: bool = True,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Get the sorting order of the CP factors by their explained variance ratio.
+    RH 2024
+
+    Args:
+        tensor_dense (Union[np.ndarray, torch.Tensor]):
+            Dense tensor to be reconstructed.
+        cp_factors (Union[list, 'tensorly.CPTensor']):
+            CP factors. If a list of factors, then each factor should be a 2D 
+            array of shape *(n_samples, rank)*. Can also be a tensorly 
+            CPTensor object.
+        cp_weights (Optional[Union[np.ndarray, torch.Tensor]]):
+            Weights for each factor. shape *(rank)*. (Default is ``None``)
+        orthogonalizable_EVR (bool):
+            Whether to use the orthogonalizable EVR calculation, which optimizes
+            the scaling of each factor to maximize the EVR. Uses OLS to 
+            orthogonalize the dense tensor relative to each factor. (Default is 
+            ``True``)
+
+    Returns:
+        (Tuple[np.ndarray, np.ndarray]): 
+            order (np.ndarray): 
+                Sorting order of the factors by EVR.
+            evrs (np.ndarray): 
+                Explained variance ratios of each factor.
+    """
+    if isinstance(cp_factors, list):
+        # If cp_factors is a list, use it directly
+        factors = cp_factors
+        if cp_weights is not None:
+            # Apply weights to each factor if cp_weights is provided
+            factors = [factors[ii] * cp_weights[ii] for ii in range(len(factors))]
+    elif isinstance(cp_factors, tl.cp_tensor.CPTensor):
+        # If cp_factors is a CPTensor, extract factors and apply weights
+        factors = [f * cp_factors.weights[None, :] for f in cp_factors.factors]
+    else:
+        raise ValueError('tensor_CP must be a list of factors or a tensorly CPTensor object')
+    
+    if orthogonalizable_EVR:
+        # Flatten tensor_dense and remove its mean
+        tensor_dense = tensor_dense.reshape(-1)
+        tensor_dense -= tensor_dense.mean()
+        tensor_dense_var = tensor_dense.var()  # Compute variance of tensor_dense
+
+    # Determine the rank from the shape of the first factor
+    rank = factors[0].shape[1]
+    evrs = []  # Initialize list to store explained variance ratios (EVRs)
+
+    for ii in range(rank):
+        # Extract the ii-th component from each factor and reshape to be a column vector
+        f = [f[:, ii][:, None] for f in factors]
+        if orthogonalizable_EVR:
+            # Convert CP components back to a dense tensor and flatten
+            v2 = cp_to_dense(f).reshape(-1)
+            v2 = v2 - v2.mean()  # Remove mean of v2
+            # Calculate orthogonal component of tensor_dense with respect to v2
+            v1_orth = tensor_dense - ((tensor_dense * v2).sum() / (v2 * v2).sum() )*v2
+            # Compute EVR as the fraction of variance explained by v2
+            evr = 1 - (v1_orth.var() / tensor_dense_var)
+        else:
+            # Compute EVR using a predefined function for the non-orthogonalizable case
+            evr = cp_reconstruction_EVR(tensor_dense, f)
+        evrs.append(evr)  # Append the computed EVR to the list
+
+    # Sort the EVRs in descending order and return the sorted order and EVRs
+    order = np.argsort(evrs)[::-1]
+    return order, np.array(evrs)[order]
+
+
+def cp_reconstruction_EVR(tensor_dense, tensor_CP):
+    """
+    Explained variance of a reconstructed tensor using
+    by a CP tensor (similar to kruskal tensor).
+    RH 2023
+
+    Args:
+        tensor_dense (np.ndarray or torch.Tensor):
+            Dense tensor to be reconstructed. shape (n_samples, n_features)
+        tensor_CP (tensorly CPTensor or list of np.ndarray/torch.Tensor):
+            CP tensor.
+            If a list of factors, then each factor should be a 2D array of shape
+            (n_samples, rank).
+            Can also be a tensorly CPTensor object.
+    """
+    tensor_rec = None
+    try:
+        import tensorly as tl
+        if isinstance(tensor_CP, tl.cp_tensor.CPTensor):
+            tensor_rec = tl.cp_to_tensor(tensor_CP)
+    except ImportError as e:
+        raise ImportError('tensorly not installed. Please install tensorly or provide a list of factors as the tensor_CP argument.')
+    
+    if tensor_rec is None:
+        assert isinstance(tensor_CP, list), 'tensor_CP must be a list of factors'
+        assert all([isinstance(f, (np.ndarray, torch.Tensor)) for f in tensor_CP]), 'tensor_CP must be a list of factors'
+        tensor_rec = cp_to_dense(tensor_CP)
+
+    if isinstance(tensor_dense, torch.Tensor):
+        var = torch.var
+    elif isinstance(tensor_dense, np.ndarray):
+        var = np.var
+    ev = 1 - (var(tensor_dense - tensor_rec) / var(tensor_dense))
+    return ev

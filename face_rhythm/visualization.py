@@ -313,7 +313,7 @@ class FrameVisualizer:
             ## Check text_positions
             if text_positions is not None:
                 assert isinstance(text_positions, np.ndarray), 'text_positions must be a numpy array.'
-                assert text_positions.dtype == np.float32, 'text_positions must be a numpy array of np.float32.'
+                # assert text_positions.dtype == np.float32, 'text_positions must be a numpy array of np.float32.'
                 assert text_positions.ndim == 2, 'text_positions must be a 2D array.'
                 assert text_positions.shape[-1] == 2, 'text_positions must have 2 coordinates (x,y).'
 
@@ -321,7 +321,7 @@ class FrameVisualizer:
             assert isinstance(text_color, str) or isinstance(text_color, list), 'text_color must be a string or a list.'
             if isinstance(text_color, list):
                 assert len(text_color) == len(text), 'Length of text_color must match the length of text.'
-                assert all([isinstance(color, str) for color in text_color]), 'All elements of text_color must be strings.'
+                # assert all([isinstance(color, str) for color in text_color]), 'All elements of text_color must be strings.'
 
             ## Check text_size
             assert isinstance(text_size, int) or isinstance(text_size, list), 'text_size must be an integer or a list.'
