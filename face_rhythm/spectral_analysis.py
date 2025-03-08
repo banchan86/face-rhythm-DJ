@@ -297,7 +297,7 @@ class VQT_Analyzer(FR_Module):
             import matplotlib.pyplot as plt
             x_0 = x_axis[0] / self.VQT.Fs_sample
             x_N = x_axis[-1] / self.VQT.Fs_sample
-            fig, axs = plt.subplots(2, 1, figsize=(10, 5))
+            fig, axs = plt.subplots(2, 1, figsize=(10, 5), sharex=True, sharey=True)
             axs[0].imshow(np.abs(spec[0,:,:]), aspect='auto', origin='lower', cmap='hot')
             axs[1].imshow(np.abs(spec[1,:,:]), aspect='auto', origin='lower', cmap='hot')
             axs[0].set_title(f'Spectrogram of x and y displacements of point {idx_point}')
