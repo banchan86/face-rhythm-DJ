@@ -31,6 +31,10 @@ class PointTracker(FR_Module):
                             "criteria": (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03),  ## Stopping criteria for optical flow optimization
                         },
                     },
+        params_clahe: dict={
+                        "clipLimit": 40.0,
+                        "tileGridSize": (150, 150),
+                    },
         params_outlier_handling: dict={
                         'threshold_displacement': 25,  ## Maximum displacement between frames, in pixels.
                         'framesHalted_before': 30,  ## Number of frames to halt tracking before a violation.
@@ -41,6 +45,7 @@ class PointTracker(FR_Module):
                         'alpha':1.0,
                         'point_sizes':1,
         },
+        frame_start: int=0,
         verbose: Union[bool, int]=1,
     ):
         """
@@ -85,6 +90,10 @@ class PointTracker(FR_Module):
                 See https://docs.opencv.org/3.4/d4/dee/tutorial_optical_flow.html
                  and https://docs.opencv.org/3.4/dc/d6b/group__video__track.html#ga473e4b886d0bcc6b65831eb88ed93323
                  for more information about the lucas kanade optical flow parameters.
+            params_clahe (dict, optional):
+                Parameters for CLAHE.
+                If None, no CLAHE will be applied.
+                kwargs will be passed to cv2.createCLAHE.
             params_outlier_handling (dict, optional):
                 Parameters for outlier handling.
                 Outliers/violations are frames when a point goes beyond a
@@ -111,6 +120,9 @@ class PointTracker(FR_Module):
                     }
                 See fr.visualization.FrameVisualizer for more information.
                 Leave out 'points_colors' as this is reserved for outlier coloring.
+            frame_start (int, optional):
+                The frame to start tracking from. Try to only change only for 
+                 visualization and set to 0 for actualy runs.
             verbose (bool or int, optional):
                 Whether or not to print progress updates.
                 0: no progress updates
@@ -125,7 +137,9 @@ class PointTracker(FR_Module):
         self._verbose = int(verbose)
         self._visualize_video = bool(visualize_video)
         self._params_visualization = params_visualization.copy()
+        self._params_clahe = params_clahe.copy()
         self._params_outlier_handling = params_outlier_handling.copy()
+        self._frame_start = int(frame_start)
 
         ## Assert that buffered_video_reader is a fr.helpers.BufferedVideoReader object
         type(buffered_video_reader), isinstance(buffered_video_reader, BufferedVideoReader)  ## line needed sometimes for next assert to work
@@ -198,7 +212,7 @@ class PointTracker(FR_Module):
         if self._contiguous:
             video = self.buffered_video_reader
             video.method_getitem = "continuous"
-            video.set_iterator_frame_idx(0)
+            video.set_iterator_frame_idx(self._frame_start)
             self.videos = [video]
         else:
             self.buffered_video_reader.method_getitem = "by_video"
@@ -411,7 +425,7 @@ class PointTracker(FR_Module):
         self.violations_currentVideo = scipy.sparse.lil_matrix((len(video), points_prev.shape[0]), dtype=np.bool_)
 
         self.i_frame = 0
-        video.set_iterator_frame_idx(0)
+        video.set_iterator_frame_idx(self._frame_start)
         with tqdm(total=len(video), desc='frame #', position=0, leave=True, disable=self._verbose < 2, mininterval=1.0) as pbar:
             while (self.i_frame < len(video)):
                 for frame in video:
@@ -472,6 +486,7 @@ class PointTracker(FR_Module):
                 # points=points_new[None,...].astype(np.int64),
                 points=[points_new[self._pointIdx_violations_current].astype(np.int64), points_new[~self._pointIdx_violations_current].astype(np.int64)],
                 points_colors=[(0,0,255), (0,255,0)],
+                # points_colors=[(0,0,255), (0,0,255)],
                 **self._params_visualization,
             )
 
@@ -531,6 +546,11 @@ class PointTracker(FR_Module):
 
         ## Convert to numpy array
         vid = vid.numpy()
+        
+        ## Perform CLAHE
+        if self._params_clahe is not None:
+            clahe = cv2.createCLAHE(**self._params_clahe)
+            vid = np.stack([clahe.apply(frame) for frame in vid], axis=0)
 
         return vid
 
