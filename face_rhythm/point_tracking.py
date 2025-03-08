@@ -46,7 +46,6 @@ class PointTracker(FR_Module):
                         'alpha':1.0,
                         'point_sizes':1,
         },
-        frame_start: int=0,
         verbose: Union[bool, int]=1,
     ):
         """
@@ -146,7 +145,7 @@ class PointTracker(FR_Module):
         self._params_visualization = params_visualization.copy()
         self._params_clahe = params_clahe.copy()
         self._params_outlier_handling = params_outlier_handling.copy()
-        self._frame_start = int(frame_start)
+        self._frame_start = int(idx_start)
 
         ## Assert that buffered_video_reader is a fr.helpers.BufferedVideoReader object
         type(buffered_video_reader), isinstance(buffered_video_reader, BufferedVideoReader)  ## line needed sometimes for next assert to work
@@ -412,7 +411,7 @@ class PointTracker(FR_Module):
         video,
         points_prev,
         frame_prev,
-        idx_start=0,
+        idx_start=None,
     ):
         """
         Track points in a single video.
@@ -433,7 +432,8 @@ class PointTracker(FR_Module):
                 Previous frame. Should be formatted correctly, as no
                  corrective formatting will be done here.
             idx_start (int, optional):
-                The index of the first frame to track. Default is 0.
+                The index of the first frame to track. 
+                If None, the index will defer to the idx_start defined in the __init__.
 
         Returns:
             points (np.ndarray, np.float32):
@@ -451,7 +451,7 @@ class PointTracker(FR_Module):
         points_tracked = np.zeros((len(video), points_prev.shape[0], 2), dtype=np.float32)
         self.violations_currentVideo = scipy.sparse.lil_matrix((len(video), points_prev.shape[0]), dtype=np.bool_)
 
-        self.i_frame = self._frame_start
+        self.i_frame = self._frame_start if idx_start is None else idx_start
         video.set_iterator_frame_idx(self._frame_start)
         with tqdm(total=len(video), desc='frame #', position=0, leave=True, disable=self._verbose < 2, mininterval=1.0) as pbar:
             while (self.i_frame < len(video)):
