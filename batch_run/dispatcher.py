@@ -54,9 +54,9 @@ params_template = {
     },
     "paths_videos": {
         "directory_videos": dir_videos,
-        "filename_videos_strMatch": "cam4.*avi",
+        "filename_videos_strMatch": "video1.*avi",
         # "filename_videos_strMatch": "test\.avi",
-        "depth": 1,
+        "depth": 2,
     },
     "BufferedVideoReader": {
         "buffer_size": 1000,
@@ -80,28 +80,35 @@ params_template = {
             "rois_points_idx": [
                 0,
             ],
-            "point_spacing": 9,
+            "point_spacing": 10,
         },
     },
     "PointTracker": {
         "contiguous": True,
         "params_optical_flow": {
             "method": "lucas_kanade",
-            "mesh_rigidity": 0.045,
-            "mesh_n_neighbors": 12,
-            "relaxation": 0.0015,
+            "mesh_rigidity": 0.01,
+            "mesh_n_neighbors": 80,
+            "relaxation": 0.001,
             "kwargs_method": {
                 "winSize": [
-                    25,
-                    25,
+                    80,
+                    80,
                 ],
-                "maxLevel": 2,
+                "maxLevel": 5,
                 "criteria": [
-                    3,
+                    3, ## leave as 3
                     2,
-                    0.03,
+                    0.0003,
                 ],
             },
+        },
+        "params_clahe": {
+            "clipLimit": 40.0,
+            "tileGridSize": [
+                120,
+                120,
+            ],
         },
         "visualize_video": False,
         "params_visualization": {
@@ -109,22 +116,23 @@ params_template = {
             "point_sizes": 2,
         },
         "params_outlier_handling": {
-            "threshold_displacement": 150,
-            "framesHalted_before": 40,
-            "framesHalted_after": 40,
+            "threshold_displacement": 250,
+            "framesHalted_before": 20,
+            "framesHalted_after": 20,
         },
+        "idx_start": 0,
         "verbose": 2,
     },
     "VQT_Analyzer": {
         "params_VQT": {
-            "Q_lowF": 3,
+            "Q_lowF": 3.5,
             "Q_highF": 5,
-            "F_min": 1.0,
+            "F_min": 0.5,
             "F_max": 60,
-            "n_freq_bins": 36,
-            "win_size": 701,
-            "symmetry": 'left',
-            "taper_asymmetric": True,
+            "n_freq_bins": 40,
+            "win_size": 20001,
+            "symmetry": 'center',
+            "taper_asymmetric": False,
             "plot_pref": False,
             "downsample_factor": 20,
             "padding": "valid",
@@ -236,43 +244,73 @@ name_save=name_job
 paths_log = [str(Path(dir_save) / f'{name_save}{jobNum}' / 'print_log_%j.log') for jobNum in range(len(params))]
 
 ## define slurm SBATCH parameters
+# sbatch_config_list = \
+# [f"""#!/usr/bin/bash
+# #SBATCH --job-name={name_slurm}
+# #SBATCH --output={path}
+# #SBATCH --constraint=intel
+# #SBATCH --partition=medium
+# #SBATCH -c 16
+# #SBATCH -n 1
+# #SBATCH --mem=64GB
+# #SBATCH --time=0-23:59:00
+
+# unset XDG_RUNTIME_DIR
+
+# cd /n/data1/hms/neurobio/sabatini/rich/
+
+# date
+
+# echo "loading modules"
+# module load gcc/9.2.0
+
+# echo "activating environment"
+# source activate {name_env}
+
+# echo "starting job"
+# python "$@"
+# """ for path in paths_log]
+
+# # SBATCH --constraint=intel
+# # SBATCH --gres=gpu:1,vram:23G
+# # SBATCH --partition=gpu_requeue
+
+# # SBATCH --partition=gpu_quad
+# # SBATCH --gres=gpu:1,vram:31G
+
+# # SBATCH --constraint=intel
+# # SBATCH --partition=short
+
+
+
+
+
+
 sbatch_config_list = \
 [f"""#!/usr/bin/bash
-#SBATCH --job-name={name_slurm}
-#SBATCH --output={path}
-#SBATCH --constraint=intel
-#SBATCH --partition=gpu_quad
-#SBATCH --gres=gpu:1,vram:31G
-#SBATCH -c 8
-#SBATCH -n 1
-#SBATCH --mem=48GB
-#SBATCH --time=0-7:30:00
+#SBATCH --account=kempner_bsabatini_lab  # The account name for the job.
+#SBATCH --job-name={name_slurm}          # Job name
+#SBATCH --output={path}                  # File to write: STDOUT (and STDERR if --error is not used)
+#SBATCH --partition=kempner_requeue      # Partition (job queue)
+#SBATCH --gres=gpu:1                     # Number of GPUs
+#SBATCH -c 16                            # Number of cores (-c) on one node
+#SBATCH -n 1                             # Number of nodes (-n)
+#SBATCH --mem=48GB                       # Memory pool for all cores (see also --mem-per-cpu)
+#SBATCH --time=0-8:00:00                 # Runtime in D-HH:MM:SS
+#SBATCH --requeue                        # Requeue the job if it is preempted
 
-unset XDG_RUNTIME_DIR
-
-cd /n/data1/hms/neurobio/sabatini/rich/
-
-date
-
-echo "loading modules"
-module load gcc/9.2.0
+echo "Unsetting XDG_RUNTIME_DIR"
+unset XDG_RUNTIME_DIR                    # This prevents an error with the conda environment
 
 echo "activating environment"
 source activate {name_env}
 
-echo "starting job"
+echo "starting job with call: python $@"
 python "$@"
 """ for path in paths_log]
 
-# SBATCH --constraint=intel
-# SBATCH --gres=gpu:1,vram:23G
-# SBATCH --partition=gpu_requeue
-
-# SBATCH --partition=gpu_quad
-# SBATCH --gres=gpu:1,vram:31G
-
-# SBATCH --constraint=intel
-# SBATCH --partition=short
+#SBATCH --mail-type=FAIL                 # Type of email notification- BEGIN,END,FAIL,ALL
+#SBATCH --hold                           # Hold the job in the queue
 
 
 util.batch_run(

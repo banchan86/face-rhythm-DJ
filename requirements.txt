@@ -27,3 +27,4 @@ py_cpuinfo
 GPUtil
 psutil
 requests
+ffmpeg-python

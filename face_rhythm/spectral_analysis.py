@@ -40,6 +40,8 @@ class VQT_Analyzer(FR_Module):
             'n_freq_bins': 55,
             'win_size': 501,
             'plot_pref': False,
+            'symmetry': 'center',
+            'taper_asymmetric': True,
             'downsample_factor': 4,
             'padding': 'valid',
             'DEVICE_compute': 'cpu',
@@ -68,7 +70,7 @@ class VQT_Analyzer(FR_Module):
         self._demo_spectrogram = None
 
         ## Initalize VQT filters
-        self.VQT = helpers.VQT(**params_VQT)
+        self.vqt_model = helpers.VQT(**params_VQT)
 
         ## For FR_Module compatibility
         self.config = {
@@ -81,8 +83,8 @@ class VQT_Analyzer(FR_Module):
         self.run_info = {
         }
         self.run_data = {
-            'VQT': {key: self.VQT.__dict__[key] for key in ['filters', 'wins']},
-            'frequencies': self.VQT.freqs,
+            'VQT': {key: self.vqt_model.__dict__[key] for key in ['filters', 'wins']},
+            'frequencies': self.vqt_model.freqs,
         }
         ## Append the self.run_info data to self.run_data
         # self.run_data.update(self.run_info)
