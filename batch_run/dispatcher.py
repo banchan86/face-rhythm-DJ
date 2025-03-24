@@ -87,7 +87,7 @@ params_template = {
         "contiguous": True,
         "params_optical_flow": {
             "method": "lucas_kanade",
-            "mesh_rigidity": 0.01,
+            "mesh_rigidity": 0.005,
             "mesh_n_neighbors": 80,
             "relaxation": 0.001,
             "kwargs_method": {
