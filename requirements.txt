@@ -28,3 +28,5 @@ GPUtil
 psutil
 requests
 ffmpeg-python
+ipympl
+vqt
