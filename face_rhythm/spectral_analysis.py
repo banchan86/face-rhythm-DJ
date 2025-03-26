@@ -1,5 +1,6 @@
 from typing import Union
 from pathlib import Path
+import math
 
 import numpy as np
 import torch
@@ -38,17 +39,19 @@ class VQT_Analyzer(FR_Module):
             'F_min': 1,
             'F_max': 40,
             'n_freq_bins': 55,
-            'win_size': 501,
-            'plot_pref': False,
-            'downsample_factor': 4,
+            'window_type': 'hann',
+            'symmetry': 'center',
+            'taper_asymmetric': True,
+            'downsample_factor': 8,
             'padding': 'valid',
-            'DEVICE_compute': 'cpu',
-            'DEVICE_return': 'cpu',
-            'return_complex': False,
+            'fft_conv': True,
+            'fast_length': True,
+            'take_abs': True,
             'filters': None, 
             'plot_pref': False,
-            'progressBar': True,
         },
+        batch_size: int=10,
+        DEVICE_compute='cpu',
         normalization_factor: float=0.99,
         spectrogram_exponent: float=1.0,
         one_over_f_exponent: float=1.0,
@@ -57,10 +60,14 @@ class VQT_Analyzer(FR_Module):
         super().__init__()
 
         ## Set attributes
+        self._params_VQT = params_VQT
+        self._batch_size = int(batch_size)
+        self._DEVICE_compute = DEVICE_compute
         self._normalization_factor = float(normalization_factor)
         self._spectrogram_exponent = float(spectrogram_exponent)
         self._one_over_f_exponent = float(one_over_f_exponent)
         self._verbose = int(verbose)
+
         self.spectrograms = None
         self.x_axis = None
         self.freqs = None
@@ -68,11 +75,16 @@ class VQT_Analyzer(FR_Module):
         self._demo_spectrogram = None
 
         ## Initalize VQT filters
-        self.VQT = helpers.VQT(**params_VQT)
+        # self.vqt_model = helpers.VQT(**params_VQT)
+        import vqt
+        self.vqt_model = vqt.VQT(**params_VQT)
+        self.vqt_model.cpu()
 
         ## For FR_Module compatibility
         self.config = {
             'params_VQT': params_VQT,
+            'batch_size': batch_size,
+            'DEVICE_compute': DEVICE_compute,
             'normalization_factor': normalization_factor,
             'spectrogram_exponent': spectrogram_exponent,
             'one_over_f_exponent': one_over_f_exponent,
@@ -81,8 +93,8 @@ class VQT_Analyzer(FR_Module):
         self.run_info = {
         }
         self.run_data = {
-            'VQT': {key: self.VQT.__dict__[key] for key in ['filters', 'wins']},
-            'frequencies': self.VQT.freqs,
+            'VQT': {key: getattr(self.vqt_model, key).cpu().detach().numpy() for key in ['filters', 'wins']},
+            'frequencies': self.vqt_model.freqs,
         }
         ## Append the self.run_info data to self.run_data
         # self.run_data.update(self.run_info)
@@ -118,10 +130,20 @@ class VQT_Analyzer(FR_Module):
         """
         ## Prepare traces
         point_positions = self._prepare_pointPositions(point_positions)
+        points_tracked = self._prepare_displacements(points_tracked, point_positions)
         ## Compute spectrograms
-        spec, x_axis, freqs = self.VQT(self._prepare_displacements(points_tracked, point_positions))
+        freqs = self.vqt_model.freqs
+        xAxis = self.vqt_model.get_xAxis(points_tracked.shape[-1])
+        ### send vqt_model to device
+        self.vqt_model.to(self._DEVICE_compute)
+        spec = torch.cat([
+            self.vqt_model(p.to(self._DEVICE_compute)).cpu()
+            for p in tqdm(helpers.make_batches(points_tracked, batch_size=self._batch_size), disable=not self._verbose > 1, desc='Computing spectrograms', leave=True, position=0, total=int(math.ceil(points_tracked.shape[0] / self._batch_size)))
+        ], dim=0)
+        self.vqt_model.to('cpu')
+        ## Reshape and normalize spectrograms
         spec_rs = self._normalize_spectrogram(spec)
-        return spec_rs.cpu().numpy(), x_axis.cpu().numpy(), freqs
+        return spec_rs.cpu().numpy(), xAxis.cpu().numpy(), freqs.cpu().numpy()
 
 
     def transform_all(self, points_tracked: dict, point_positions: np.ndarray):
@@ -219,7 +241,7 @@ class VQT_Analyzer(FR_Module):
             s_norm = torch.polar(s_mag_norm, s_phase)
         
         ## Do 1/f correction
-        s_norm = s_norm * torch.as_tensor(self.VQT.freqs[None,:,None] ** self._one_over_f_exponent, dtype=torch.float32) if self._one_over_f_exponent != 0 else s_norm
+        s_norm = s_norm * torch.as_tensor(self.vqt_model.freqs[None,:,None] ** self._one_over_f_exponent, dtype=torch.float32) if self._one_over_f_exponent != 0 else s_norm
         s_norm_rs = s_norm.reshape(2, int(s_norm.shape[0]/2), s_norm.shape[1], s_norm.shape[2])
         return s_norm_rs
 
@@ -242,7 +264,7 @@ class VQT_Analyzer(FR_Module):
                 A 2D numpy array of shape(n_points * 2, n_frames) containing the
                  displacements of the tracked points.
         """
-        out = torch.as_tensor(traces.reshape((traces.shape[0], -1), order='F').T, dtype=torch.float32) - point_positions[:,None]
+        out = torch.as_tensor(traces.reshape((traces.shape[0], -1), order='F').T, dtype=torch.float32) - point_positions[:, None]
         return out
 
     def _prepare_pointPositions(self, point_positions):
@@ -295,8 +317,8 @@ class VQT_Analyzer(FR_Module):
         ## Plot
         if plot:
             import matplotlib.pyplot as plt
-            x_0 = x_axis[0] / self.VQT.Fs_sample
-            x_N = x_axis[-1] / self.VQT.Fs_sample
+            x_0 = x_axis[0] / self.vqt_model.Fs_sample
+            x_N = x_axis[-1] / self.vqt_model.Fs_sample
             fig, axs = plt.subplots(2, 1, figsize=(10, 5), sharex=True, sharey=True)
             axs[0].imshow(np.abs(spec[0,:,:]), aspect='auto', origin='lower', cmap='hot')
             axs[1].imshow(np.abs(spec[1,:,:]), aspect='auto', origin='lower', cmap='hot')
@@ -319,7 +341,7 @@ class VQT_Analyzer(FR_Module):
         def _get_avgpool1d_downsample_length(length, kernel_size, stride, padding):
             return int((length + 2 * padding - kernel_size) / stride + 1)
         shapes_pt = [p.shape for p in points_tracked.values()]
-        shapes_spec = [(s[2], len(self.VQT.freqs), s[1], _get_avgpool1d_downsample_length(s[0], kernel_size=int(self.VQT.downsample_factor), stride=self.VQT.downsample_factor, padding=0)) for s in shapes_pt]
+        shapes_spec = [(s[2], len(self.vqt_model.freqs), s[1], _get_avgpool1d_downsample_length(s[0], kernel_size=int(self.vqt_model.downsample_factor), stride=self.vqt_model.downsample_factor, padding=0)) for s in shapes_pt]
         sizes_spec = [np.prod(s) * spec.itemsize / 1e9 for s in shapes_spec]
         print(f'Total size of all spectrograms: {np.sum(sizes_spec):.8f} GB') if self._verbose > 1 else None
         print(f'Individual spectrogram sizes (in GB): {sizes_spec}') if self._verbose > 1 else None            
@@ -327,7 +349,7 @@ class VQT_Analyzer(FR_Module):
         return spec, x_axis, freqs
 
     
-    def __repr__(self): return f"{self.__class__.__name__}( normalization_factor={self._normalization_factor}, spectrogram_exponent={self._spectrogram_exponent}, VQT={self.VQT}, verbose={self._verbose} )"
+    def __repr__(self): return f"{self.__class__.__name__}( normalization_factor={self._normalization_factor}, spectrogram_exponent={self._spectrogram_exponent}, VQT={self.vqt_model}, verbose={self._verbose} )"
     def __getitem__(self, index): return self.spectrograms(index)
     def __len__(self): return len(self.spectrograms)
     def __iter__(self): return iter(self.spectrograms.items())    

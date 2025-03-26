@@ -143,7 +143,7 @@ class PointTracker(FR_Module):
         self._verbose = int(verbose)
         self._visualize_video = bool(visualize_video)
         self._params_visualization = params_visualization.copy()
-        self._params_clahe = params_clahe.copy()
+        self._params_clahe = params_clahe.copy() if params_clahe is not None else None
         self._params_outlier_handling = params_outlier_handling.copy()
         self._frame_start = int(idx_start)
 
@@ -607,8 +607,7 @@ class PointTracker(FR_Module):
         points_new[self._pointIdx_violations_current] = points_prev[self._pointIdx_violations_current]
 
         ## Apply mesh_rigity force
-        points_new -= (_vector_displacement(torch.as_tensor(points_new, dtype=torch.float32), self.d_0, self.neighbors)*self.params_optical_flow['mesh_rigidity']).numpy()
-
+        points_new -= (_vector_displacement(torch.as_tensor(points_new, dtype=torch.float32), self.d_0, self.neighbors) * self.params_optical_flow['mesh_rigidity']).numpy()
         ## Apply relaxation force
         points_new -= (points_new-self.point_positions)*self.params_optical_flow['relaxation']
 
